@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${REPO:-dvroom/resumer}"
+REPO="${REPO:-robotButler/resumer}"
 PREFIX="${PREFIX:-$HOME/.local}"
 BINDIR="${BINDIR:-$PREFIX/bin}"
 NAME="${NAME:-res}"
@@ -111,4 +111,3 @@ install -m 755 "$out" "$BINDIR/$NAME"
 
 echo "Installed: $BINDIR/$NAME"
 echo "Try: $NAME --help"
-

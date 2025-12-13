@@ -5,7 +5,7 @@ Track tmux sessions per project directory, with a simple CLI + TUI.
 
 ### From GitHub Releases (recommended)
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dvroom/resumer/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/robotButler/resumer/main/install.sh | bash
 ```
 
 ### From source (requires Bun)
