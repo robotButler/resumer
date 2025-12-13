@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            os: ubuntu-latest
+            outfile: res-linux-x64
+          - target: macos-arm64
+            os: macos-latest
+            outfile: res-macos-arm64
+          - target: macos-x64
+            os: macos-13
+            outfile: res-macos-x64
+          - target: windows-x64
+            os: windows-latest
+            outfile: res-windows-x64.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: "1.3.3"
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun build ./bin/res.ts --compile -e term.js -e pty.js --outfile "./dist/${{ matrix.outfile }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.outfile }}
+          path: dist/${{ matrix.outfile }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/**/res-linux-x64
+            dist/**/res-macos-arm64
+            dist/**/res-macos-x64
+            dist/**/res-windows-x64.exe
+
