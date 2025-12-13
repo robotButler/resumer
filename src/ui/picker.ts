@@ -1,4 +1,5 @@
 import { blessed } from "./blessed.ts";
+import { getBlessedTerminalOverride } from "./term.ts";
 
 export type PickerItem<T> = {
   label: string;
@@ -16,7 +17,8 @@ export async function runPicker<T>(args: {
   }
 
   return await new Promise<T | null>((resolve) => {
-    const screen = blessed.screen({ smartCSR: true, title: args.title });
+    const term = getBlessedTerminalOverride();
+    const screen = blessed.screen({ smartCSR: true, title: args.title, terminal: term });
 
     const list = blessed.list({
       parent: screen,

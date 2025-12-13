@@ -4,6 +4,7 @@ import type { Project, SessionRecord, StateV1 } from "../types.ts";
 import { listProjects, listSessionsForProject, normalizeAndEnsureProject, writeState } from "../state.ts";
 import { nowIso } from "../time.ts";
 import type { TmuxSessionInfo } from "../tmux.ts";
+import { getBlessedTerminalOverride } from "./term.ts";
 
 export type TuiActions = {
   refreshLiveSessions(): void;
@@ -47,7 +48,8 @@ export async function runMainTui(args: {
   }
 
   return await new Promise<void>((resolve, reject) => {
-    const screen = blessed.screen({ smartCSR: true, title: "resumer" });
+    const term = getBlessedTerminalOverride();
+    const screen = blessed.screen({ smartCSR: true, title: "resumer", terminal: term });
 
     const projectsBox = blessed.list({
       parent: screen,
