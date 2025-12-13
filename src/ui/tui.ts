@@ -6,6 +6,15 @@ import { nowIso } from "../time.ts";
 import type { TmuxSessionInfo } from "../tmux.ts";
 import { getBlessedTerminalOverride } from "./term.ts";
 
+const colors = {
+  accent: "magenta",
+  selected: {
+    bg: "#6272a4",
+    fg: "white",
+  },
+  border: "#6272a4",
+};
+
 export type TuiActions = {
   refreshLiveSessions(): void;
   listTmuxSessions(): TmuxSessionInfo[];
@@ -19,9 +28,9 @@ export type TuiActions = {
 
 function sessionLabel(s: SessionRecord): string {
   const cmd = s.command?.trim().length ? s.command.trim() : "(shell)";
-  const kind = s.kind === "linked" ? "linked" : s.kind === "managed" ? "managed" : "";
-  const suffix = kind ? ` · ${kind}` : "";
-  return `${s.name} {gray-fg}${cmd}${suffix}{/}`;
+  const kind = s.kind === "linked" ? "{cyan-fg}linked{/cyan-fg}" : s.kind === "managed" ? "{green-fg}managed{/green-fg}" : "";
+  const suffix = kind ? ` {gray-fg}·{/gray-fg} ${kind}` : "";
+  return `{bold}${s.name}{/bold} {gray-fg}${cmd}{/gray-fg}${suffix}`;
 }
 
 function tmuxSessionLabel(info: TmuxSessionInfo, state: StateV1): string {
@@ -29,9 +38,9 @@ function tmuxSessionLabel(info: TmuxSessionInfo, state: StateV1): string {
   const project = tracked ? state.projects[tracked.projectId] : undefined;
   const trackedCmd = tracked?.command?.trim().length ? tracked.command.trim() : "";
   const cmd = trackedCmd || info.currentCommand?.trim() || "(unknown)";
-  const projectHint = project ? ` · ${project.name}` : "";
-  const attachedHint = info.attached ? ` · attached:${info.attached}` : "";
-  return `${info.name} {gray-fg}${cmd}${projectHint}${attachedHint}{/}`;
+  const projectHint = project ? ` {gray-fg}·{/gray-fg} {cyan-fg}${project.name}{/cyan-fg}` : "";
+  const attachedHint = info.attached ? ` {gray-fg}·{/gray-fg} {green-fg}attached:${info.attached}{/green-fg}` : "";
+  return `{bold}${info.name}{/bold} {gray-fg}${cmd}{/gray-fg}${projectHint}${attachedHint}`;
 }
 
 function getSelectedIndex(list: Widgets.ListElement): number {
@@ -51,51 +60,74 @@ export async function runMainTui(args: {
     const term = getBlessedTerminalOverride();
     const screen = blessed.screen({ smartCSR: true, title: "resumer", terminal: term });
 
-    const projectsBox = blessed.list({
+    const header = blessed.box({
       parent: screen,
       top: 0,
       left: 0,
+      height: 1,
+      width: "100%",
+      content: "",
+      tags: true,
+      style: { bg: "default" },
+    });
+
+    const projectsBox = blessed.list({
+      parent: screen,
+      top: 1,
+      left: 0,
       width: "45%",
-      height: "100%-1",
+      height: "100%-2",
       keys: true,
       vi: true,
       mouse: true,
       border: "line",
-      label: " Projects ",
-      style: { selected: { bg: "blue", fg: "white" } },
-      scrollbar: { style: { bg: "blue" } },
+      label: " {magenta-fg}{bold}Projects{/bold}{/magenta-fg} ",
+      style: {
+        border: { fg: colors.border },
+        selected: { bg: colors.selected.bg, fg: colors.selected.fg, bold: true },
+        label: { fg: colors.accent },
+      },
+      scrollbar: { style: { bg: colors.accent } },
       tags: true,
     });
 
     const sessionsBox = blessed.list({
       parent: screen,
-      top: 0,
+      top: 1,
       left: "45%",
       width: "55%",
-      height: "100%-1",
+      height: "100%-2",
       keys: true,
       vi: true,
       mouse: true,
       border: "line",
-      label: " Sessions ",
-      style: { selected: { bg: "blue", fg: "white" } },
-      scrollbar: { style: { bg: "blue" } },
+      label: " {magenta-fg}{bold}Sessions{/bold}{/magenta-fg} ",
+      style: {
+        border: { fg: colors.border },
+        selected: { bg: colors.selected.bg, fg: colors.selected.fg, bold: true },
+        label: { fg: colors.accent },
+      },
+      scrollbar: { style: { bg: colors.accent } },
       tags: true,
     });
 
     const tmuxBox = blessed.list({
       parent: screen,
-      top: 0,
+      top: 1,
       left: 0,
       width: "100%",
-      height: "100%-1",
+      height: "100%-2",
       keys: true,
       vi: true,
       mouse: true,
       border: "line",
-      label: " tmux ",
-      style: { selected: { bg: "blue", fg: "white" } },
-      scrollbar: { style: { bg: "blue" } },
+      label: " {magenta-fg}{bold}tmux Sessions{/bold}{/magenta-fg} ",
+      style: {
+        border: { fg: colors.border },
+        selected: { bg: colors.selected.bg, fg: colors.selected.fg, bold: true },
+        label: { fg: colors.accent },
+      },
+      scrollbar: { style: { bg: colors.accent } },
       tags: true,
       hidden: true,
     });
@@ -107,6 +139,7 @@ export async function runMainTui(args: {
       height: 1,
       width: "100%",
       content: "",
+      tags: true,
       style: { fg: "gray" },
     });
 
@@ -114,24 +147,26 @@ export async function runMainTui(args: {
       parent: screen,
       border: "line",
       height: 7,
-      width: "80%",
+      width: "60%",
       top: "center",
       left: "center",
-      label: " Input ",
+      label: " {magenta-fg}{bold}Input{/bold}{/magenta-fg} ",
       tags: true,
       hidden: true,
+      style: { border: { fg: colors.accent } },
     });
 
     const question = blessed.question({
       parent: screen,
       border: "line",
       height: 7,
-      width: "80%",
+      width: "60%",
       top: "center",
       left: "center",
-      label: " Confirm ",
+      label: " {magenta-fg}{bold}Confirm{/bold}{/magenta-fg} ",
       tags: true,
       hidden: true,
+      style: { border: { fg: colors.accent } },
     });
 
     let mode: "res" | "tmux" = "res";
@@ -147,7 +182,14 @@ export async function runMainTui(args: {
     let modalClose: (() => void) | null = null;
 
     let footerTimer: ReturnType<typeof setTimeout> | null = null;
+    function updateHeader() {
+      const projectName = selectedProject ? selectedProject.name : "";
+      const projectHint = projectName ? ` {gray-fg}·{/gray-fg} ${projectName}` : "";
+      const modeTag = mode === "tmux" ? "{green-fg}{bold}tmux{/bold}{/green-fg}" : "{cyan-fg}{bold}res{/bold}{/cyan-fg}";
+      header.setContent(` {magenta-fg}{bold}resumer{/bold}{/magenta-fg} {gray-fg}·{/gray-fg} ${modeTag}${projectHint}`);
+    }
     function updateFooter() {
+      updateHeader();
       if (mode === "tmux") {
         footer.setContent(
           "Mode: tmux (p: res) · Enter: attach · d: delete · c: capture · y: copy name · r: refresh · q: quit",
@@ -215,6 +257,7 @@ export async function runMainTui(args: {
       } else {
         refreshResMode();
       }
+      updateHeader();
       screen.render();
     }
 
@@ -581,6 +624,7 @@ export async function runMainTui(args: {
     updateFooter();
     projectsBox.focus();
     footer.setFront();
+    header.setFront();
     refresh();
   });
 }
