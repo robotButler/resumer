@@ -14,6 +14,7 @@
   "scripts": {
     "res": "bun run bin/res.ts",
     "build": "bun build ./bin/res.ts --compile -e term.js -e pty.js --outfile ./dist/res",
+    "install:local": "./scripts/install-local.sh",
     "test": "bun test",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
