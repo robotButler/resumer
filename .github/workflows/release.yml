@@ -23,7 +23,7 @@ jobs:
             os: macos-latest
             outfile: res-macos-arm64
           - target: macos-x64
-            os: macos-13
+            os: macos-15-intel
             outfile: res-macos-x64
           - target: windows-x64
             os: windows-latest
@@ -58,4 +58,3 @@ jobs:
             dist/**/res-macos-arm64
             dist/**/res-macos-x64
             dist/**/res-windows-x64.exe
-
