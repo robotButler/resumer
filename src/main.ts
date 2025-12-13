@@ -27,6 +27,7 @@ import {
   listTmuxSessions,
   setTmuxEnv,
   setTmuxBuffer,
+  unsetTmuxEnv,
 } from "./tmux.ts";
 import { runMainTui } from "./ui/tui.ts";
 import { runPicker } from "./ui/picker.ts";
@@ -541,6 +542,18 @@ export async function main(argv: string[]): Promise<void> {
           } catch {
             // ignore
           }
+          removeSession(state, sessionName);
+        },
+        unassociateSession: (sessionName) => {
+          if (!hasTmuxSession(sessionName)) throw new Error(`tmux session not found: ${sessionName}`);
+          unsetTmuxEnv(sessionName, [
+            "RESUMER_MANAGED",
+            "RESUMER_ASSOCIATED",
+            "RESUMER_PROJECT_ID",
+            "RESUMER_PROJECT_PATH",
+            "RESUMER_COMMAND",
+            "RESUMER_CREATED_AT",
+          ]);
           removeSession(state, sessionName);
         },
         captureSessionPane: (sessionName) => {

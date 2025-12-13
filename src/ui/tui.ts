@@ -20,6 +20,7 @@ export type TuiActions = {
   listTmuxSessions(): TmuxSessionInfo[];
   createSession(project: Project, command?: string): SessionRecord;
   deleteSession(sessionName: string): void;
+  unassociateSession(sessionName: string): void;
   captureSessionPane(sessionName: string): string;
   copyText(text: string): { method: string };
   linkSession(project: Project, sessionName: string, yes: boolean): void;
@@ -192,7 +193,7 @@ export async function runMainTui(args: {
       updateHeader();
       if (mode === "tmux") {
         footer.setContent(
-          "Mode: tmux (p: res) · Enter: attach · d: delete · c: capture · y: copy name · r: refresh · q: quit",
+          "Mode: tmux (p: res) · Enter: attach · d: delete · c: capture · y: copy name · l: associate · u: unassociate · r: refresh · q: quit",
         );
         return;
       }
@@ -439,6 +440,137 @@ export async function runMainTui(args: {
       }
     }
 
+    function openProjectPicker(title: string, onPick: (project: Project | null) => void) {
+      const entries: Array<{ kind: "create" } | { kind: "project"; project: Project }> = [
+        { kind: "create" },
+        ...projects.map((project) => ({ kind: "project" as const, project })),
+      ];
+
+      const items = [
+        "{green-fg}+{/green-fg} Create project by path…",
+        ...projects.map((p) => `${p.name} {gray-fg}${p.path}{/gray-fg}`),
+      ];
+
+      const picker = blessed.list({
+        parent: screen,
+        top: "center",
+        left: "center",
+        width: "80%",
+        height: Math.min(18, Math.max(7, items.length + 4)),
+        keys: true,
+        vi: true,
+        mouse: true,
+        border: "line",
+        label: ` {magenta-fg}{bold}${title}{/bold}{/magenta-fg} `,
+        style: {
+          border: { fg: colors.accent },
+          selected: { bg: colors.selected.bg, fg: colors.selected.fg, bold: true },
+          label: { fg: colors.accent },
+        },
+        scrollbar: { style: { bg: colors.accent } },
+        tags: true,
+        items,
+      });
+
+      const previousFooter = footer.getContent();
+      footer.setContent("Picker · Enter: select · Esc/q: cancel");
+      picker.focus();
+      screen.render();
+
+      function cleanup() {
+        modalClose = null;
+        footer.setContent(previousFooter);
+        picker.destroy();
+        updateFooter();
+        (mode === "tmux" ? tmuxBox : focused === "projects" ? projectsBox : sessionsBox).focus();
+        screen.render();
+      }
+
+      function cancel() {
+        cleanup();
+        onPick(null);
+      }
+
+      modalClose = cancel;
+      picker.key(["escape", "q"], () => cancel());
+      picker.on("select", (_: unknown, idx: number) => {
+        const entry = entries[idx];
+        if (!entry) return cancel();
+
+        cleanup();
+
+        if (entry.kind === "create") {
+          withPrompt("New project path", process.cwd(), (p) => {
+            if (!p) return onPick(null);
+            try {
+              const project = normalizeAndEnsureProject(args.state, p, process.cwd());
+              writeState(args.state);
+              onPick(project);
+            } catch (err) {
+              showError(err instanceof Error ? err.message : String(err));
+              onPick(null);
+            }
+          });
+          return;
+        }
+
+        onPick(entry.project);
+      });
+    }
+
+    function associateSelectedTmuxSession() {
+      const idx = getSelectedIndex(tmuxBox);
+      selectedTmuxIndex = idx;
+      const sess = tmuxSessions[idx];
+      if (!sess) return;
+
+      const existing = args.state.sessions[sess.name];
+      if (existing) {
+        const existingProject = args.state.projects[existing.projectId]?.name ?? existing.projectId;
+        flashFooter(`Already associated with ${existingProject} (use u to unassociate)`);
+        return;
+      }
+
+      projects = listProjects(args.state);
+      openProjectPicker(`Associate ${sess.name}`, (project) => {
+        if (!project) return refresh();
+        try {
+          args.actions.linkSession(project, sess.name, false);
+          writeState(args.state);
+          flashFooter(`Associated ${sess.name} → ${project.name}`);
+          refresh();
+        } catch (err) {
+          showError(err instanceof Error ? err.message : String(err));
+        }
+      });
+    }
+
+    function unassociateSelectedTmuxSession() {
+      const idx = getSelectedIndex(tmuxBox);
+      selectedTmuxIndex = idx;
+      const sess = tmuxSessions[idx];
+      if (!sess) return;
+
+      const existing = args.state.sessions[sess.name];
+      if (!existing) {
+        flashFooter("Session is not associated with a project.");
+        return;
+      }
+
+      const existingProject = args.state.projects[existing.projectId]?.name ?? existing.projectId;
+      withConfirm(`Unassociate tmux session?\n${sess.name}\n(from ${existingProject})`, (ok) => {
+        if (!ok) return refresh();
+        try {
+          args.actions.unassociateSession(sess.name);
+          writeState(args.state);
+          flashFooter(`Unassociated ${sess.name}`);
+          refresh();
+        } catch (err) {
+          showError(err instanceof Error ? err.message : String(err));
+        }
+      });
+    }
+
     function createSessionForSelectedProject() {
       if (!selectedProject) return;
       withPrompt("Command (optional)", "", (cmd) => {
@@ -591,8 +723,13 @@ export async function runMainTui(args: {
     });
     screen.key(["l"], () => {
       if (modalClose) return;
-      if (mode !== "res") return;
+      if (mode === "tmux") return associateSelectedTmuxSession();
       linkExistingSessionToSelectedProject();
+    });
+    screen.key(["u"], () => {
+      if (modalClose) return;
+      if (mode !== "tmux") return;
+      unassociateSelectedTmuxSession();
     });
     screen.key(["x"], () => {
       if (modalClose) return;

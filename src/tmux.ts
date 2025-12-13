@@ -104,6 +104,17 @@ export function setTmuxEnv(sessionName: string, vars: Record<string, string>): v
   }
 }
 
+export function unsetTmuxEnv(sessionName: string, keys: string[]): void {
+  for (const key of keys) {
+    try {
+      runTmuxRaw(["set-environment", "-t", sessionName, "-u", key]);
+    } catch (err) {
+      if (err instanceof TmuxError && /unknown variable/i.test(err.stderr)) continue;
+      throw err;
+    }
+  }
+}
+
 export function getTmuxEnv(sessionName: string, key: string): string | null {
   try {
     const { stdout } = runTmuxRaw(["show-environment", "-t", sessionName, key]);

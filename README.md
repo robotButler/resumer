@@ -43,7 +43,7 @@ TUI modes:
   - `t` switches to tmux mode
 - **tmux mode**: all tmux sessions
   - `p` switches back to res mode
-  - `Enter` attach · `d` delete · `c` capture pane · `y` copy session name
+  - `Enter` attach · `d` delete · `c` capture pane · `y` copy session name · `l` associate → project · `u` unassociate
 
 ### Open a project (registers if needed)
 ```bash
