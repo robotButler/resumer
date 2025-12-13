@@ -5,6 +5,8 @@ import { listProjects, listSessionsForProject, normalizeAndEnsureProject, writeS
 import { nowIso } from "../time.ts";
 import type { TmuxSessionInfo } from "../tmux.ts";
 import { getBlessedTerminalOverride } from "./term.ts";
+import type { CodexSessionSummary } from "../external/codex.ts";
+import type { ClaudeSessionSummary } from "../external/claude.ts";
 
 const colors = {
   accent: "magenta",
@@ -18,6 +20,10 @@ const colors = {
 export type TuiActions = {
   refreshLiveSessions(): void;
   listTmuxSessions(): TmuxSessionInfo[];
+  listCodexSessions(): CodexSessionSummary[];
+  codexSessionDetails(session: CodexSessionSummary): string;
+  listClaudeSessions(): ClaudeSessionSummary[];
+  claudeSessionDetails(session: ClaudeSessionSummary): string;
   createSession(project: Project, command?: string): SessionRecord;
   deleteSession(sessionName: string): void;
   unassociateSession(sessionName: string): void;
@@ -42,6 +48,29 @@ function tmuxSessionLabel(info: TmuxSessionInfo, state: StateV1): string {
   const projectHint = project ? ` {gray-fg}·{/gray-fg} {cyan-fg}${project.name}{/cyan-fg}` : "";
   const attachedHint = info.attached ? ` {gray-fg}·{/gray-fg} {green-fg}attached:${info.attached}{/green-fg}` : "";
   return `{bold}${info.name}{/bold} {gray-fg}${cmd}{/gray-fg}${projectHint}${attachedHint}`;
+}
+
+function truncate(text: string, max: number): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (t.length <= max) return t;
+  return t.slice(0, Math.max(0, max - 1)) + "…";
+}
+
+function codexSessionLabel(info: CodexSessionSummary): string {
+  const cwd = info.cwd ? ` {gray-fg}${info.cwd}{/gray-fg}` : "";
+  const when = info.lastActivityAt ? ` {gray-fg}·{/gray-fg} {green-fg}${info.lastActivityAt}{/green-fg}` : "";
+  const prompt = info.lastPrompt ? ` {gray-fg}·{/gray-fg} {gray-fg}${truncate(info.lastPrompt, 80)}{/gray-fg}` : "";
+  const id = info.id.length > 12 ? info.id.slice(0, 12) : info.id;
+  return `{bold}${id}{/bold}${cwd}${when}${prompt}`;
+}
+
+function claudeSessionLabel(info: ClaudeSessionSummary): string {
+  const project = info.projectPath ? ` {gray-fg}${info.projectPath}{/gray-fg}` : "";
+  const when = info.lastActivityAt ? ` {gray-fg}·{/gray-fg} {green-fg}${info.lastActivityAt}{/green-fg}` : "";
+  const model = info.model ? ` {gray-fg}·{/gray-fg} {cyan-fg}${info.model}{/cyan-fg}` : "";
+  const prompt = info.lastPrompt ? ` {gray-fg}·{/gray-fg} {gray-fg}${truncate(info.lastPrompt, 80)}{/gray-fg}` : "";
+  const id = info.id.length > 12 ? info.id.slice(0, 12) : info.id;
+  return `{bold}${id}{/bold}${project}${when}${model}${prompt}`;
 }
 
 function getSelectedIndex(list: Widgets.ListElement): number {
@@ -170,7 +199,7 @@ export async function runMainTui(args: {
       style: { border: { fg: colors.accent } },
     });
 
-    let mode: "res" | "tmux" = "res";
+    let mode: "res" | "tmux" | "codex" | "claude" = "res";
     let focused: "projects" | "sessions" = "projects";
     let projects: Project[] = [];
     let sessions: SessionRecord[] = [];
@@ -180,25 +209,50 @@ export async function runMainTui(args: {
     let tmuxSessions: TmuxSessionInfo[] = [];
     let selectedTmuxIndex = 0;
 
+    let codexSessions: CodexSessionSummary[] = [];
+    let selectedCodexIndex = 0;
+
+    let claudeSessions: ClaudeSessionSummary[] = [];
+    let selectedClaudeIndex = 0;
+
     let modalClose: (() => void) | null = null;
 
     let footerTimer: ReturnType<typeof setTimeout> | null = null;
     function updateHeader() {
       const projectName = selectedProject ? selectedProject.name : "";
-      const projectHint = projectName ? ` {gray-fg}·{/gray-fg} ${projectName}` : "";
-      const modeTag = mode === "tmux" ? "{green-fg}{bold}tmux{/bold}{/green-fg}" : "{cyan-fg}{bold}res{/bold}{/cyan-fg}";
+      const projectHint = mode === "res" && projectName ? ` {gray-fg}·{/gray-fg} ${projectName}` : "";
+      const modeTag =
+        mode === "tmux"
+          ? "{green-fg}{bold}tmux{/bold}{/green-fg}"
+          : mode === "codex"
+            ? "{magenta-fg}{bold}codex{/bold}{/magenta-fg}"
+            : mode === "claude"
+              ? "{yellow-fg}{bold}claude{/bold}{/yellow-fg}"
+              : "{cyan-fg}{bold}res{/bold}{/cyan-fg}";
       header.setContent(` {magenta-fg}{bold}resumer{/bold}{/magenta-fg} {gray-fg}·{/gray-fg} ${modeTag}${projectHint}`);
     }
     function updateFooter() {
       updateHeader();
       if (mode === "tmux") {
         footer.setContent(
-          "Mode: tmux (p: res) · Enter: attach · d: delete · c: capture · y: copy name · l: associate · u: unassociate · r: refresh · q: quit",
+          "Mode: tmux (1: res, 3: codex, 4: claude) · Enter: attach · d: delete · c: capture · y: copy name · l: associate · u: unassociate · r: refresh · q: quit",
+        );
+        return;
+      }
+      if (mode === "codex") {
+        footer.setContent(
+          "Mode: codex (1: res, 2: tmux, 4: claude) · Enter: view · y: copy id · r: refresh · q: quit",
+        );
+        return;
+      }
+      if (mode === "claude") {
+        footer.setContent(
+          "Mode: claude (1: res, 2: tmux, 3: codex) · Enter: view · y: copy id · r: refresh · q: quit",
         );
         return;
       }
       footer.setContent(
-        "Mode: res (t: tmux) · Tab: focus · Enter: attach · c: create · d: delete · l: link · a: add · x: remove · r: refresh · q: quit",
+        "Mode: res (2: tmux, 3: codex, 4: claude) · Tab: focus · Enter: attach · c: create · d: delete · l: link · a: add · x: remove · r: refresh · q: quit",
       );
     }
 
@@ -241,9 +295,28 @@ export async function runMainTui(args: {
     function refreshTmuxMode() {
       tmuxSessions = args.actions.listTmuxSessions();
       const items = tmuxSessions.map((s) => tmuxSessionLabel(s, args.state));
+      tmuxBox.setLabel(" {magenta-fg}{bold}tmux Sessions{/bold}{/magenta-fg} ");
       tmuxBox.setItems(items.length ? items : ["(no tmux sessions)"]);
       selectedTmuxIndex = Math.min(selectedTmuxIndex, Math.max(0, tmuxSessions.length - 1));
       tmuxBox.select(selectedTmuxIndex);
+    }
+
+    function refreshCodexMode() {
+      codexSessions = args.actions.listCodexSessions();
+      tmuxBox.setLabel(" {magenta-fg}{bold}Codex Sessions{/bold}{/magenta-fg} ");
+      const items = codexSessions.map((s) => codexSessionLabel(s));
+      tmuxBox.setItems(items.length ? items : ["(no Codex sessions found)"]);
+      selectedCodexIndex = Math.min(selectedCodexIndex, Math.max(0, codexSessions.length - 1));
+      tmuxBox.select(selectedCodexIndex);
+    }
+
+    function refreshClaudeMode() {
+      claudeSessions = args.actions.listClaudeSessions();
+      tmuxBox.setLabel(" {magenta-fg}{bold}Claude Sessions{/bold}{/magenta-fg} ");
+      const items = claudeSessions.map((s) => claudeSessionLabel(s));
+      tmuxBox.setItems(items.length ? items : ["(no Claude sessions found)"]);
+      selectedClaudeIndex = Math.min(selectedClaudeIndex, Math.max(0, claudeSessions.length - 1));
+      tmuxBox.select(selectedClaudeIndex);
     }
 
     function refresh() {
@@ -253,11 +326,10 @@ export async function runMainTui(args: {
         showError(err instanceof Error ? err.message : String(err));
         return;
       }
-      if (mode === "tmux") {
-        refreshTmuxMode();
-      } else {
-        refreshResMode();
-      }
+      if (mode === "tmux") refreshTmuxMode();
+      else if (mode === "codex") refreshCodexMode();
+      else if (mode === "claude") refreshClaudeMode();
+      else refreshResMode();
       updateHeader();
       screen.render();
     }
@@ -284,10 +356,10 @@ export async function runMainTui(args: {
       resolve();
     }
 
-    function setMode(nextMode: "res" | "tmux") {
+    function setMode(nextMode: "res" | "tmux" | "codex" | "claude") {
       mode = nextMode;
       updateFooter();
-      if (mode === "tmux") {
+      if (mode !== "res") {
         projectsBox.hide();
         sessionsBox.hide();
         tmuxBox.show();
@@ -380,7 +452,7 @@ export async function runMainTui(args: {
       }
     }
 
-    function openCaptureViewer(title: string, content: string) {
+    function openTextViewer(title: string, content: string) {
       const maxChars = 200_000;
       const truncated = content.length > maxChars;
       const visible = truncated ? content.slice(-maxChars) : content;
@@ -403,7 +475,7 @@ export async function runMainTui(args: {
         content: header + visible,
       });
 
-      footer.setContent("Capture view · q/esc: close · y: copy");
+      footer.setContent("View · q/esc: close · y: copy");
       viewer.focus();
       screen.render();
 
@@ -411,7 +483,7 @@ export async function runMainTui(args: {
         modalClose = null;
         viewer.destroy();
         updateFooter();
-        (mode === "tmux" ? tmuxBox : focused === "projects" ? projectsBox : sessionsBox).focus();
+        (mode === "res" ? (focused === "projects" ? projectsBox : sessionsBox) : tmuxBox).focus();
         screen.render();
       }
 
@@ -434,7 +506,59 @@ export async function runMainTui(args: {
       if (!sess) return;
       try {
         const captured = args.actions.captureSessionPane(sess.name);
-        openCaptureViewer(`capture: ${sess.name}`, captured);
+        openTextViewer(`capture: ${sess.name}`, captured);
+      } catch (err) {
+        showError(err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    function viewSelectedCodexSession() {
+      const idx = getSelectedIndex(tmuxBox);
+      selectedCodexIndex = idx;
+      const sess = codexSessions[idx];
+      if (!sess) return;
+      try {
+        const content = args.actions.codexSessionDetails(sess);
+        openTextViewer(`codex: ${sess.id}`, content);
+      } catch (err) {
+        showError(err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    function viewSelectedClaudeSession() {
+      const idx = getSelectedIndex(tmuxBox);
+      selectedClaudeIndex = idx;
+      const sess = claudeSessions[idx];
+      if (!sess) return;
+      try {
+        const content = args.actions.claudeSessionDetails(sess);
+        openTextViewer(`claude: ${sess.id}`, content);
+      } catch (err) {
+        showError(err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    function copySelectedCodexSessionId() {
+      const idx = getSelectedIndex(tmuxBox);
+      selectedCodexIndex = idx;
+      const sess = codexSessions[idx];
+      if (!sess) return;
+      try {
+        const res = args.actions.copyText(sess.id);
+        flashFooter(`Copied Codex session id via ${res.method}`);
+      } catch (err) {
+        showError(err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    function copySelectedClaudeSessionId() {
+      const idx = getSelectedIndex(tmuxBox);
+      selectedClaudeIndex = idx;
+      const sess = claudeSessions[idx];
+      if (!sess) return;
+      try {
+        const res = args.actions.copyText(sess.id);
+        flashFooter(`Copied Claude session id via ${res.method}`);
       } catch (err) {
         showError(err instanceof Error ? err.message : String(err));
       }
@@ -482,7 +606,7 @@ export async function runMainTui(args: {
         footer.setContent(previousFooter);
         picker.destroy();
         updateFooter();
-        (mode === "tmux" ? tmuxBox : focused === "projects" ? projectsBox : sessionsBox).focus();
+        (mode === "res" ? (focused === "projects" ? projectsBox : sessionsBox) : tmuxBox).focus();
         screen.render();
       }
 
@@ -698,6 +822,22 @@ export async function runMainTui(args: {
       if (modalClose) return;
       setMode("res");
     });
+    screen.key(["1"], () => {
+      if (modalClose) return;
+      setMode("res");
+    });
+    screen.key(["2"], () => {
+      if (modalClose) return;
+      setMode("tmux");
+    });
+    screen.key(["3"], () => {
+      if (modalClose) return;
+      setMode("codex");
+    });
+    screen.key(["4"], () => {
+      if (modalClose) return;
+      setMode("claude");
+    });
     screen.key(["m"], () => {
       if (modalClose) return;
       setMode(mode === "tmux" ? "res" : "tmux");
@@ -714,16 +854,19 @@ export async function runMainTui(args: {
     screen.key(["c"], () => {
       if (modalClose) return;
       if (mode === "tmux") return captureSelectedTmuxSession();
+      if (mode !== "res") return;
       createSessionForSelectedProject();
     });
     screen.key(["d"], () => {
       if (modalClose) return;
       if (mode === "tmux") return deleteSelectedTmuxSession();
+      if (mode !== "res") return;
       deleteSelectedSession();
     });
     screen.key(["l"], () => {
       if (modalClose) return;
       if (mode === "tmux") return associateSelectedTmuxSession();
+      if (mode !== "res") return;
       linkExistingSessionToSelectedProject();
     });
     screen.key(["u"], () => {
@@ -738,8 +881,9 @@ export async function runMainTui(args: {
     });
     screen.key(["y"], () => {
       if (modalClose) return;
-      if (mode !== "tmux") return;
-      copySelectedTmuxSessionName();
+      if (mode === "tmux") return copySelectedTmuxSessionName();
+      if (mode === "codex") return copySelectedCodexSessionId();
+      if (mode === "claude") return copySelectedClaudeSessionId();
     });
 
     projectsBox.on("select item", (_: unknown, idx: number) => {
@@ -750,7 +894,11 @@ export async function runMainTui(args: {
     });
 
     sessionsBox.key(["enter"], () => attachSelectedSession());
-    tmuxBox.key(["enter"], () => attachSelectedTmuxSession());
+    tmuxBox.key(["enter"], () => {
+      if (mode === "tmux") return attachSelectedTmuxSession();
+      if (mode === "codex") return viewSelectedCodexSession();
+      if (mode === "claude") return viewSelectedClaudeSession();
+    });
     projectsBox.key(["enter"], () => {
       if (mode !== "res") return;
       focused = "sessions";

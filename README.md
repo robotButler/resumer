@@ -44,6 +44,15 @@ TUI modes:
 - **tmux mode**: all tmux sessions
   - `p` switches back to res mode
   - `Enter` attach · `d` delete · `c` capture pane · `y` copy session name · `l` associate → project · `u` unassociate
+- **codex mode** (read-only): local Codex CLI sessions
+  - `3` switches to codex mode
+  - `Enter` view · `y` copy session id
+- **claude mode** (read-only): local Claude sessions
+  - `4` switches to claude mode
+  - `Enter` view · `y` copy session id
+
+Mode switching (from anywhere):
+- `1` res · `2` tmux · `3` codex · `4` claude
 
 ### Open a project (registers if needed)
 ```bash

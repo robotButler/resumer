@@ -14,6 +14,8 @@ import {
 import type { Project, SessionRecord, StateV1 } from "./types.ts";
 import { nowIso } from "./time.ts";
 import { copyToSystemClipboard } from "./clipboard.ts";
+import { formatCodexSessionDetails, listCodexSessions, type CodexSessionSummary } from "./external/codex.ts";
+import { formatClaudeSessionDetails, listClaudeSessions, type ClaudeSessionSummary } from "./external/claude.ts";
 import {
   attachOrSwitchTmuxSession,
   captureTmuxPane,
@@ -535,6 +537,10 @@ export async function main(argv: string[]): Promise<void> {
       actions: {
         refreshLiveSessions: () => reconcileStateWithTmux(state),
         listTmuxSessions: () => listTmuxSessionInfo(),
+        listCodexSessions: () => listCodexSessions(),
+        codexSessionDetails: (session: CodexSessionSummary) => formatCodexSessionDetails(session),
+        listClaudeSessions: () => listClaudeSessions(),
+        claudeSessionDetails: (session: ClaudeSessionSummary) => formatClaudeSessionDetails(session),
         createSession: (project, cmd) => createResumerSession(state, project, cmd),
         deleteSession: (sessionName) => {
           try {
