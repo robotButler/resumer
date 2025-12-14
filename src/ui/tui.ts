@@ -22,8 +22,10 @@ export type TuiActions = {
   listTmuxSessions(): TmuxSessionInfo[];
   listCodexSessions(): CodexSessionSummary[];
   codexSessionDetails(session: CodexSessionSummary): string;
+  codexResumeCommand(sessionId: string): string;
   listClaudeSessions(): ClaudeSessionSummary[];
   claudeSessionDetails(session: ClaudeSessionSummary): string;
+  claudeResumeCommand(sessionId: string): string;
   createSession(project: Project, command?: string): SessionRecord;
   deleteSession(sessionName: string): void;
   unassociateSession(sessionName: string): void;
@@ -241,13 +243,13 @@ export async function runMainTui(args: {
       }
       if (mode === "codex") {
         footer.setContent(
-          "Mode: codex (1: res, 2: tmux, 4: claude) · Enter: view · y: copy id · r: refresh · q: quit",
+          "Mode: codex (1: res, 2: tmux, 4: claude) · Enter: view · c: tmux · y: copy id · r: refresh · q: quit",
         );
         return;
       }
       if (mode === "claude") {
         footer.setContent(
-          "Mode: claude (1: res, 2: tmux, 3: codex) · Enter: view · y: copy id · r: refresh · q: quit",
+          "Mode: claude (1: res, 2: tmux, 3: codex) · Enter: view · c: tmux · y: copy id · r: refresh · q: quit",
         );
         return;
       }
@@ -564,7 +566,77 @@ export async function runMainTui(args: {
       }
     }
 
-    function openProjectPicker(title: string, onPick: (project: Project | null) => void) {
+    function createTmuxFromCodexSession() {
+      const idx = getSelectedIndex(tmuxBox);
+      selectedCodexIndex = idx;
+      const codexSession = codexSessions[idx];
+      if (!codexSession) return;
+
+      projects = listProjects(args.state);
+      openProjectPicker(
+        `tmux for codex ${codexSession.id.slice(0, 12)}`,
+        codexSession.cwd ?? process.cwd(),
+        (project) => {
+          if (!project) return refresh();
+
+          const command = args.actions.codexResumeCommand(codexSession.id);
+          let sess: SessionRecord;
+          try {
+            sess = args.actions.createSession(project, command);
+            sess.lastAttachedAt = nowIso();
+            writeState(args.state);
+          } catch (err) {
+            showError(err instanceof Error ? err.message : String(err));
+            return;
+          }
+
+          screen.destroy();
+          try {
+            args.actions.attachSession(sess.name);
+            resolve();
+          } catch (err) {
+            fail(err);
+          }
+        },
+      );
+    }
+
+    function createTmuxFromClaudeSession() {
+      const idx = getSelectedIndex(tmuxBox);
+      selectedClaudeIndex = idx;
+      const claudeSession = claudeSessions[idx];
+      if (!claudeSession) return;
+
+      projects = listProjects(args.state);
+      openProjectPicker(
+        `tmux for claude ${claudeSession.id.slice(0, 12)}`,
+        claudeSession.projectPath ?? claudeSession.cwd ?? process.cwd(),
+        (project) => {
+          if (!project) return refresh();
+
+          const command = args.actions.claudeResumeCommand(claudeSession.id);
+          let sess: SessionRecord;
+          try {
+            sess = args.actions.createSession(project, command);
+            sess.lastAttachedAt = nowIso();
+            writeState(args.state);
+          } catch (err) {
+            showError(err instanceof Error ? err.message : String(err));
+            return;
+          }
+
+          screen.destroy();
+          try {
+            args.actions.attachSession(sess.name);
+            resolve();
+          } catch (err) {
+            fail(err);
+          }
+        },
+      );
+    }
+
+    function openProjectPicker(title: string, createPathDefault: string, onPick: (project: Project | null) => void) {
       const entries: Array<{ kind: "create" } | { kind: "project"; project: Project }> = [
         { kind: "create" },
         ...projects.map((project) => ({ kind: "project" as const, project })),
@@ -624,7 +696,7 @@ export async function runMainTui(args: {
         cleanup();
 
         if (entry.kind === "create") {
-          withPrompt("New project path", process.cwd(), (p) => {
+          withPrompt("New project path", createPathDefault, (p) => {
             if (!p) return onPick(null);
             try {
               const project = normalizeAndEnsureProject(args.state, p, process.cwd());
@@ -656,7 +728,7 @@ export async function runMainTui(args: {
       }
 
       projects = listProjects(args.state);
-      openProjectPicker(`Associate ${sess.name}`, (project) => {
+      openProjectPicker(`Associate ${sess.name}`, process.cwd(), (project) => {
         if (!project) return refresh();
         try {
           args.actions.linkSession(project, sess.name, false);
@@ -854,6 +926,8 @@ export async function runMainTui(args: {
     screen.key(["c"], () => {
       if (modalClose) return;
       if (mode === "tmux") return captureSelectedTmuxSession();
+      if (mode === "codex") return createTmuxFromCodexSession();
+      if (mode === "claude") return createTmuxFromClaudeSession();
       if (mode !== "res") return;
       createSessionForSelectedProject();
     });

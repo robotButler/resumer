@@ -46,10 +46,10 @@ TUI modes:
   - `Enter` attach · `d` delete · `c` capture pane · `y` copy session name · `l` associate → project · `u` unassociate
 - **codex mode** (read-only): local Codex CLI sessions
   - `3` switches to codex mode
-  - `Enter` view · `y` copy session id
+  - `Enter` view · `c` create tmux session · `y` copy session id
 - **claude mode** (read-only): local Claude sessions
   - `4` switches to claude mode
-  - `Enter` view · `y` copy session id
+  - `Enter` view · `c` create tmux session · `y` copy session id
 
 Mode switching (from anywhere):
 - `1` res · `2` tmux · `3` codex · `4` claude
@@ -94,3 +94,23 @@ res --reset --yes           # wipe all resumer state (kills all tracked sessions
 State is stored in:
 - `$XDG_STATE_HOME/resumer/state.json`, or
 - `~/.local/state/resumer/state.json`
+
+## Config (optional)
+Resumer reads `config.json` from:
+- `$XDG_CONFIG_HOME/resumer/config.json`, or
+- `~/.config/resumer/config.json`
+
+Supported settings:
+```json
+{
+  "codex": { "args": ["--yolo"] },
+  "claude": { "args": ["--dangerously-skip-permissions"] }
+}
+```
+
+Notes:
+- `codex --yolo` is treated as an alias for `--dangerously-bypass-approvals-and-sandbox`.
+
+Env overrides (space-separated, or a JSON array string):
+- `RESUMER_CODEX_ARGS`
+- `RESUMER_CLAUDE_ARGS`

@@ -16,6 +16,8 @@ import { nowIso } from "./time.ts";
 import { copyToSystemClipboard } from "./clipboard.ts";
 import { formatCodexSessionDetails, listCodexSessions, type CodexSessionSummary } from "./external/codex.ts";
 import { formatClaudeSessionDetails, listClaudeSessions, type ClaudeSessionSummary } from "./external/claude.ts";
+import { getClaudeDefaultArgs, getCodexDefaultArgs, loadConfigOrDefault } from "./config.ts";
+import { shJoin } from "./shell.ts";
 import {
   attachOrSwitchTmuxSession,
   captureTmuxPane,
@@ -502,6 +504,7 @@ export async function main(argv: string[]): Promise<void> {
     throw new Error("tmux is not installed or not on PATH.");
   }
 
+  const config = loadConfigOrDefault();
   const state = loadStateOrDefault();
   reconcileStateWithTmux(state);
   writeState(state);
@@ -539,8 +542,11 @@ export async function main(argv: string[]): Promise<void> {
         listTmuxSessions: () => listTmuxSessionInfo(),
         listCodexSessions: () => listCodexSessions(),
         codexSessionDetails: (session: CodexSessionSummary) => formatCodexSessionDetails(session),
+        codexResumeCommand: (sessionId: string) => shJoin(["codex", ...getCodexDefaultArgs(config), "resume", sessionId]),
         listClaudeSessions: () => listClaudeSessions(),
         claudeSessionDetails: (session: ClaudeSessionSummary) => formatClaudeSessionDetails(session),
+        claudeResumeCommand: (sessionId: string) =>
+          shJoin(["claude", ...getClaudeDefaultArgs(config), "--resume", sessionId]),
         createSession: (project, cmd) => createResumerSession(state, project, cmd),
         deleteSession: (sessionName) => {
           try {
