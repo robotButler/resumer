@@ -1,14 +1,26 @@
 import { blessed } from "./blessed.ts";
 import { getBlessedTerminalOverride } from "./term.ts";
 
-const colors = {
-  accent: "magenta",
-  selected: {
-    bg: "#6272a4",
-    fg: "white",
-  },
-  border: "#6272a4",
+// Mode colors for branding
+const modeColors = {
+  res: "#2a9d8f",       // teal
+  tmux: "#f4a261",      // orange
+  codex: "#e9c46a",     // gold
+  claude: "#e63946",    // red
 };
+
+const colors = {
+  accent: "#2a9d8f",    // default teal
+  border: "#457b9d",
+};
+
+// Colored "resumer" title: r(teal) e(orange) s(gold) u(red) mer(white)
+const coloredTitle =
+  `{${modeColors.res}-fg}r{/}` +
+  `{${modeColors.tmux}-fg}e{/}` +
+  `{${modeColors.codex}-fg}s{/}` +
+  `{${modeColors.claude}-fg}u{/}` +
+  `{bold}mer{/bold}`;
 
 export type PickerItem<T> = {
   label: string;
@@ -17,7 +29,7 @@ export type PickerItem<T> = {
 };
 
 function styledKey(key: string): string {
-  return `{magenta-fg}{bold}${key}{/bold}{/magenta-fg}`;
+  return `{#2a9d8f-fg}{bold}${key}{/bold}{/}`;
 }
 
 function styledHelp(items: Array<[string, string]>): string {
@@ -45,7 +57,7 @@ export async function runPicker<T>(args: {
       left: 0,
       height: 1,
       width: "100%",
-      content: `{magenta-fg}{bold}resumer{/bold}{/magenta-fg} {gray-fg}·{/gray-fg} {bold}${args.title}{/bold}`,
+      content: ` ${coloredTitle} {gray-fg}·{/gray-fg} {bold}${args.title}{/bold}`,
       tags: true,
       style: { bg: "default" },
     });
@@ -66,11 +78,10 @@ export async function runPicker<T>(args: {
       vi: true,
       mouse: true,
       border: "line",
-      label: ` {magenta-fg}{bold}${args.title}{/bold}{/magenta-fg} `,
+      label: ` {#2a9d8f-fg}{bold}${args.title}{/bold}{/} `,
       style: {
         border: { fg: colors.border },
-        selected: { bg: colors.selected.bg, fg: colors.selected.fg, bold: true },
-        label: { fg: colors.accent },
+        selected: { bg: colors.accent, fg: "black", bold: true },
       },
       items: args.items.map((it) => {
         const label = `{bold}${it.label}{/bold}`;

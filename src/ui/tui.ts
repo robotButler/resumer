@@ -8,14 +8,27 @@ import { getBlessedTerminalOverride } from "./term.ts";
 import type { CodexSessionSummary } from "../external/codex.ts";
 import type { ClaudeSessionSummary } from "../external/claude.ts";
 
-const colors = {
-  accent: "magenta",
-  selected: {
-    bg: "#6272a4",
-    fg: "white",
-  },
-  border: "#6272a4",
+// Mode-specific colors
+const modeColors = {
+  res: "#2a9d8f",       // teal
+  tmux: "#f4a261",      // orange
+  codex: "#e9c46a",     // gold
+  claude: "#e63946",    // red
 };
+
+const colors = {
+  secondary: "#457b9d",   // steel blue
+  selectedDim: {
+    bg: "#374151",
+    fg: "#9ca3af",
+  },
+  border: "#457b9d",
+  borderDim: "#4b5563",
+};
+
+function getModeColor(mode: keyof typeof modeColors): string {
+  return modeColors[mode];
+}
 
 export type TuiActions = {
   refreshLiveSessions(): void;
@@ -37,7 +50,7 @@ export type TuiActions = {
 
 function sessionLabel(s: SessionRecord): string {
   const cmd = s.command?.trim().length ? s.command.trim() : "(shell)";
-  const kind = s.kind === "linked" ? "{cyan-fg}linked{/cyan-fg}" : s.kind === "managed" ? "{green-fg}managed{/green-fg}" : "";
+  const kind = s.kind === "linked" ? `{#f4a261-fg}linked{/}` : s.kind === "managed" ? `{#2a9d8f-fg}managed{/}` : "";
   const suffix = kind ? ` {gray-fg}·{/gray-fg} ${kind}` : "";
   return `{bold}${s.name}{/bold} {gray-fg}${cmd}{/gray-fg}${suffix}`;
 }
@@ -47,8 +60,8 @@ function tmuxSessionLabel(info: TmuxSessionInfo, state: StateV1): string {
   const project = tracked ? state.projects[tracked.projectId] : undefined;
   const trackedCmd = tracked?.command?.trim().length ? tracked.command.trim() : "";
   const cmd = trackedCmd || info.currentCommand?.trim() || "(unknown)";
-  const projectHint = project ? ` {gray-fg}·{/gray-fg} {cyan-fg}${project.name}{/cyan-fg}` : "";
-  const attachedHint = info.attached ? ` {gray-fg}·{/gray-fg} {green-fg}attached:${info.attached}{/green-fg}` : "";
+  const projectHint = project ? ` {gray-fg}·{/gray-fg} {#457b9d-fg}${project.name}{/}` : "";
+  const attachedHint = info.attached ? ` {gray-fg}·{/gray-fg} {#e9c46a-fg}attached:${info.attached}{/}` : "";
   return `{bold}${info.name}{/bold} {gray-fg}${cmd}{/gray-fg}${projectHint}${attachedHint}`;
 }
 
@@ -60,7 +73,7 @@ function truncate(text: string, max: number): string {
 
 function codexSessionLabel(info: CodexSessionSummary): string {
   const cwd = info.cwd ? ` {gray-fg}${info.cwd}{/gray-fg}` : "";
-  const when = info.lastActivityAt ? ` {gray-fg}·{/gray-fg} {green-fg}${info.lastActivityAt}{/green-fg}` : "";
+  const when = info.lastActivityAt ? ` {gray-fg}·{/gray-fg} {#2a9d8f-fg}${info.lastActivityAt}{/}` : "";
   const prompt = info.lastPrompt ? ` {gray-fg}·{/gray-fg} {gray-fg}${truncate(info.lastPrompt, 80)}{/gray-fg}` : "";
   const id = info.id.length > 12 ? info.id.slice(0, 12) : info.id;
   return `{bold}${id}{/bold}${cwd}${when}${prompt}`;
@@ -68,8 +81,8 @@ function codexSessionLabel(info: CodexSessionSummary): string {
 
 function claudeSessionLabel(info: ClaudeSessionSummary): string {
   const project = info.projectPath ? ` {gray-fg}${info.projectPath}{/gray-fg}` : "";
-  const when = info.lastActivityAt ? ` {gray-fg}·{/gray-fg} {green-fg}${info.lastActivityAt}{/green-fg}` : "";
-  const model = info.model ? ` {gray-fg}·{/gray-fg} {cyan-fg}${info.model}{/cyan-fg}` : "";
+  const when = info.lastActivityAt ? ` {gray-fg}·{/gray-fg} {#2a9d8f-fg}${info.lastActivityAt}{/}` : "";
+  const model = info.model ? ` {gray-fg}·{/gray-fg} {#457b9d-fg}${info.model}{/}` : "";
   const prompt = info.lastPrompt ? ` {gray-fg}·{/gray-fg} {gray-fg}${truncate(info.lastPrompt, 80)}{/gray-fg}` : "";
   const id = info.id.length > 12 ? info.id.slice(0, 12) : info.id;
   return `{bold}${id}{/bold}${project}${when}${model}${prompt}`;
@@ -100,7 +113,42 @@ export async function runMainTui(args: {
       width: "100%",
       content: "",
       tags: true,
+      mouse: true,
       style: { bg: "default" },
+    });
+
+    const siteUrl = "https://dvroom.dev";
+    const headerUrl = blessed.box({
+      parent: screen,
+      top: 0,
+      right: 0,
+      height: 1,
+      width: siteUrl.length + 1,
+      content: `{gray-fg}${siteUrl}{/gray-fg}`,
+      tags: true,
+      mouse: true,
+      style: { bg: "default" },
+    });
+
+    headerUrl.on("mouseover", () => {
+      headerUrl.setContent(`{underline}{white-fg}${siteUrl}{/white-fg}{/underline}`);
+      screen.render();
+    });
+    headerUrl.on("mouseout", () => {
+      headerUrl.setContent(`{gray-fg}${siteUrl}{/gray-fg}`);
+      screen.render();
+    });
+    headerUrl.on("click", () => {
+      // Try common openers - xdg-open (Linux), open (macOS)
+      try {
+        Bun.spawn(["xdg-open", siteUrl], { stdio: ["ignore", "ignore", "ignore"] });
+      } catch {
+        try {
+          Bun.spawn(["open", siteUrl], { stdio: ["ignore", "ignore", "ignore"] });
+        } catch {
+          // Silently fail if no opener available
+        }
+      }
     });
 
     const projectsBox = blessed.list({
@@ -113,13 +161,12 @@ export async function runMainTui(args: {
       vi: true,
       mouse: true,
       border: "line",
-      label: " {magenta-fg}{bold}Projects{/bold}{/magenta-fg} ",
+      label: " Projects ",
       style: {
         border: { fg: colors.border },
-        selected: { bg: colors.selected.bg, fg: colors.selected.fg, bold: true },
-        label: { fg: colors.accent },
+        selected: { bg: modeColors.res, fg: "black", bold: true },
       },
-      scrollbar: { style: { bg: colors.accent } },
+      scrollbar: { style: { bg: modeColors.res } },
       tags: true,
     });
 
@@ -133,13 +180,12 @@ export async function runMainTui(args: {
       vi: true,
       mouse: true,
       border: "line",
-      label: " {magenta-fg}{bold}Sessions{/bold}{/magenta-fg} ",
+      label: " Sessions ",
       style: {
         border: { fg: colors.border },
-        selected: { bg: colors.selected.bg, fg: colors.selected.fg, bold: true },
-        label: { fg: colors.accent },
+        selected: { bg: colors.selectedDim.bg, fg: colors.selectedDim.fg, bold: true },
       },
-      scrollbar: { style: { bg: colors.accent } },
+      scrollbar: { style: { bg: colors.borderDim } },
       tags: true,
     });
 
@@ -153,13 +199,12 @@ export async function runMainTui(args: {
       vi: true,
       mouse: true,
       border: "line",
-      label: " {magenta-fg}{bold}tmux Sessions{/bold}{/magenta-fg} ",
+      label: " Sessions ",
       style: {
         border: { fg: colors.border },
-        selected: { bg: colors.selected.bg, fg: colors.selected.fg, bold: true },
-        label: { fg: colors.accent },
+        selected: { bg: modeColors.tmux, fg: "black", bold: true },
       },
-      scrollbar: { style: { bg: colors.accent } },
+      scrollbar: { style: { bg: modeColors.tmux } },
       tags: true,
       hidden: true,
     });
@@ -182,10 +227,10 @@ export async function runMainTui(args: {
       width: "60%",
       top: "center",
       left: "center",
-      label: " {magenta-fg}{bold}Input{/bold}{/magenta-fg} ",
+      label: " Input ",
       tags: true,
       hidden: true,
-      style: { border: { fg: colors.accent } },
+      style: { border: { fg: colors.secondary } },
     });
 
     const question = blessed.question({
@@ -195,10 +240,10 @@ export async function runMainTui(args: {
       width: "60%",
       top: "center",
       left: "center",
-      label: " {magenta-fg}{bold}Confirm{/bold}{/magenta-fg} ",
+      label: " Confirm ",
       tags: true,
       hidden: true,
-      style: { border: { fg: colors.accent } },
+      style: { border: { fg: colors.secondary } },
     });
 
     let mode: "res" | "tmux" | "codex" | "claude" = "res";
@@ -220,42 +265,155 @@ export async function runMainTui(args: {
     let modalClose: (() => void) | null = null;
 
     let footerTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // Tab definitions with their positions for mouse click detection
+    const tabs = ["res", "tmux", "codex", "claude"] as const;
+    let tabPositions: Array<{ start: number; end: number; mode: typeof tabs[number] }> = [];
+    let hoveredTab: typeof tabs[number] | null = null;
+
     function updateHeader() {
-      const projectName = selectedProject ? selectedProject.name : "";
-      const projectHint = mode === "res" && projectName ? ` {gray-fg}·{/gray-fg} ${projectName}` : "";
-      const modeTag =
-        mode === "tmux"
-          ? "{green-fg}{bold}tmux{/bold}{/green-fg}"
-          : mode === "codex"
-            ? "{magenta-fg}{bold}codex{/bold}{/magenta-fg}"
-            : mode === "claude"
-              ? "{yellow-fg}{bold}claude{/bold}{/yellow-fg}"
-              : "{cyan-fg}{bold}res{/bold}{/cyan-fg}";
-      header.setContent(` {magenta-fg}{bold}resumer{/bold}{/magenta-fg} {gray-fg}·{/gray-fg} ${modeTag}${projectHint}`);
+      // Colored "resumer" title: r(teal) e(orange) s(gold) u(red) mer(white)
+      const coloredTitle =
+        `{${modeColors.res}-fg}r{/}` +
+        `{${modeColors.tmux}-fg}e{/}` +
+        `{${modeColors.codex}-fg}s{/}` +
+        `{${modeColors.claude}-fg}u{/}` +
+        `{bold}mer{/bold}`;
+
+      // Build tabs with position tracking
+      let content = ` ${coloredTitle} {gray-fg}│{/gray-fg}`;
+      let pos = 12; // " resumer │" = 12 chars
+      tabPositions = [];
+
+      for (let i = 0; i < tabs.length; i++) {
+        const tab = tabs[i];
+        const tabColor = modeColors[tab];
+        const num = i + 1;
+        const isActive = mode === tab;
+        const isHovered = hoveredTab === tab && !isActive;
+        const start = pos;
+        const label = `(${num}) ${tab}`;
+
+        if (isActive) {
+          content += `{${tabColor}-bg}{black-fg}{bold} ${label} {/bold}{/black-fg}{/}`;
+        } else if (isHovered) {
+          content += `{${tabColor}-fg}{underline} ${label} {/underline}{/}`;
+        } else {
+          content += `{gray-fg} ${label} {/gray-fg}`;
+        }
+
+        // Calculate position (label + 2 spaces padding)
+        pos += label.length + 2;
+        tabPositions.push({ start, end: pos, mode: tab });
+      }
+
+      header.setContent(content);
     }
+
+    // Handle mouse clicks on header tabs
+    header.on("click", (_mouse: any) => {
+      const x = _mouse.x;
+      for (const tab of tabPositions) {
+        if (x >= tab.start && x < tab.end) {
+          setMode(tab.mode);
+          return;
+        }
+      }
+    });
+
+    // Handle mouse hover on header tabs
+    header.on("mousemove", (_mouse: any) => {
+      const x = _mouse.x;
+      let newHovered: typeof tabs[number] | null = null;
+      for (const tab of tabPositions) {
+        if (x >= tab.start && x < tab.end) {
+          newHovered = tab.mode;
+          break;
+        }
+      }
+      if (newHovered !== hoveredTab) {
+        hoveredTab = newHovered;
+        updateHeader();
+        screen.render();
+      }
+    });
+
+    header.on("mouseout", () => {
+      if (hoveredTab !== null) {
+        hoveredTab = null;
+        updateHeader();
+        screen.render();
+      }
+    });
+
     function updateFooter() {
       updateHeader();
       if (mode === "tmux") {
         footer.setContent(
-          "Mode: tmux (1: res, 3: codex, 4: claude) · Enter: attach · d: delete · c: capture · y: copy name · l: associate · u: unassociate · r: refresh · q: quit",
+          "Enter: attach · d: delete · c: capture · y: copy name · l: associate · u: unassociate · r: refresh · q: quit",
         );
         return;
       }
       if (mode === "codex") {
         footer.setContent(
-          "Mode: codex (1: res, 2: tmux, 4: claude) · Enter: view · c: tmux · y: copy id · r: refresh · q: quit",
+          "Enter: view · c: tmux · y: copy id · r: refresh · q: quit",
         );
         return;
       }
       if (mode === "claude") {
         footer.setContent(
-          "Mode: claude (1: res, 2: tmux, 3: codex) · Enter: view · c: tmux · y: copy id · r: refresh · q: quit",
+          "Enter: view · c: tmux · y: copy id · r: refresh · q: quit",
         );
         return;
       }
       footer.setContent(
-        "Mode: res (2: tmux, 3: codex, 4: claude) · Tab: focus · Enter: attach · c: create · d: delete · l: link · a: add · x: remove · r: refresh · q: quit",
+        "Tab: focus · Enter: attach · c: create · d: delete · l: link · a: add · x: remove · r: refresh · q: quit",
       );
+    }
+
+    function updateFocusedStyles() {
+      const modeColor = getModeColor(mode);
+
+      if (mode !== "res") {
+        // For non-res modes, update tmuxBox styling
+        (tmuxBox as any).style.border.fg = modeColor;
+        (tmuxBox as any).style.selected.bg = modeColor;
+        (tmuxBox as any).style.selected.fg = "black";
+        (tmuxBox as any).style.scrollbar.bg = modeColor;
+        return;
+      }
+
+      // Update border colors based on focus
+      const projectsBorderColor = focused === "projects" ? modeColor : colors.borderDim;
+      const sessionsBorderColor = focused === "sessions" ? modeColor : colors.borderDim;
+
+      (projectsBox as any).style.border.fg = projectsBorderColor;
+      (sessionsBox as any).style.border.fg = sessionsBorderColor;
+
+      // Update selected item styles based on focus
+      const focusedSelected = { bg: modeColor, fg: "black" };
+      const projectsSelected = focused === "projects" ? focusedSelected : colors.selectedDim;
+      const sessionsSelected = focused === "sessions" ? focusedSelected : colors.selectedDim;
+
+      (projectsBox as any).style.selected.bg = projectsSelected.bg;
+      (projectsBox as any).style.selected.fg = projectsSelected.fg;
+      (sessionsBox as any).style.selected.bg = sessionsSelected.bg;
+      (sessionsBox as any).style.selected.fg = sessionsSelected.fg;
+
+      // Update scrollbar colors
+      (projectsBox as any).style.scrollbar.bg = focused === "projects" ? modeColor : colors.borderDim;
+      (sessionsBox as any).style.scrollbar.bg = focused === "sessions" ? modeColor : colors.borderDim;
+
+      // Update labels with focus indicator
+      const projectsLabel = focused === "projects"
+        ? ` {${modeColor}-fg}{bold}> Projects{/bold}{/} `
+        : " {gray-fg}Projects{/gray-fg} ";
+      const sessionsLabel = focused === "sessions"
+        ? ` {${modeColor}-fg}{bold}> Sessions{/bold}{/} `
+        : " {gray-fg}Sessions{/gray-fg} ";
+
+      projectsBox.setLabel(projectsLabel);
+      sessionsBox.setLabel(sessionsLabel);
     }
 
     function flashFooter(message: string, ms = 1500) {
@@ -297,7 +455,7 @@ export async function runMainTui(args: {
     function refreshTmuxMode() {
       tmuxSessions = args.actions.listTmuxSessions();
       const items = tmuxSessions.map((s) => tmuxSessionLabel(s, args.state));
-      tmuxBox.setLabel(" {magenta-fg}{bold}tmux Sessions{/bold}{/magenta-fg} ");
+      tmuxBox.setLabel(` {${modeColors.tmux}-fg}{bold}tmux Sessions{/bold}{/} `);
       tmuxBox.setItems(items.length ? items : ["(no tmux sessions)"]);
       selectedTmuxIndex = Math.min(selectedTmuxIndex, Math.max(0, tmuxSessions.length - 1));
       tmuxBox.select(selectedTmuxIndex);
@@ -305,7 +463,7 @@ export async function runMainTui(args: {
 
     function refreshCodexMode() {
       codexSessions = args.actions.listCodexSessions();
-      tmuxBox.setLabel(" {magenta-fg}{bold}Codex Sessions{/bold}{/magenta-fg} ");
+      tmuxBox.setLabel(` {${modeColors.codex}-fg}{bold}Codex Sessions{/bold}{/} `);
       const items = codexSessions.map((s) => codexSessionLabel(s));
       tmuxBox.setItems(items.length ? items : ["(no Codex sessions found)"]);
       selectedCodexIndex = Math.min(selectedCodexIndex, Math.max(0, codexSessions.length - 1));
@@ -314,7 +472,7 @@ export async function runMainTui(args: {
 
     function refreshClaudeMode() {
       claudeSessions = args.actions.listClaudeSessions();
-      tmuxBox.setLabel(" {magenta-fg}{bold}Claude Sessions{/bold}{/magenta-fg} ");
+      tmuxBox.setLabel(` {${modeColors.claude}-fg}{bold}Claude Sessions{/bold}{/} `);
       const items = claudeSessions.map((s) => claudeSessionLabel(s));
       tmuxBox.setItems(items.length ? items : ["(no Claude sessions found)"]);
       selectedClaudeIndex = Math.min(selectedClaudeIndex, Math.max(0, claudeSessions.length - 1));
@@ -333,6 +491,7 @@ export async function runMainTui(args: {
       else if (mode === "claude") refreshClaudeMode();
       else refreshResMode();
       updateHeader();
+      updateFocusedStyles();
       screen.render();
     }
 
@@ -372,6 +531,7 @@ export async function runMainTui(args: {
         sessionsBox.show();
         (focused === "projects" ? projectsBox : sessionsBox).focus();
       }
+      updateFocusedStyles();
       refresh();
     }
 
@@ -485,6 +645,7 @@ export async function runMainTui(args: {
         modalClose = null;
         viewer.destroy();
         updateFooter();
+        updateFocusedStyles();
         (mode === "res" ? (focused === "projects" ? projectsBox : sessionsBox) : tmuxBox).focus();
         screen.render();
       }
@@ -647,6 +808,7 @@ export async function runMainTui(args: {
         ...projects.map((p) => `${p.name} {gray-fg}${p.path}{/gray-fg}`),
       ];
 
+      const modeColor = getModeColor(mode);
       const picker = blessed.list({
         parent: screen,
         top: "center",
@@ -657,13 +819,12 @@ export async function runMainTui(args: {
         vi: true,
         mouse: true,
         border: "line",
-        label: ` {magenta-fg}{bold}${title}{/bold}{/magenta-fg} `,
+        label: ` {${modeColor}-fg}{bold}${title}{/bold}{/} `,
         style: {
-          border: { fg: colors.accent },
-          selected: { bg: colors.selected.bg, fg: colors.selected.fg, bold: true },
-          label: { fg: colors.accent },
+          border: { fg: modeColor },
+          selected: { bg: modeColor, fg: "black", bold: true },
         },
-        scrollbar: { style: { bg: colors.accent } },
+        scrollbar: { style: { bg: modeColor } },
         tags: true,
         items,
       });
@@ -678,6 +839,7 @@ export async function runMainTui(args: {
         footer.setContent(previousFooter);
         picker.destroy();
         updateFooter();
+        updateFocusedStyles();
         (mode === "res" ? (focused === "projects" ? projectsBox : sessionsBox) : tmuxBox).focus();
         screen.render();
       }
@@ -883,6 +1045,7 @@ export async function runMainTui(args: {
       if (mode !== "res") return;
       focused = focused === "projects" ? "sessions" : "projects";
       (focused === "projects" ? projectsBox : sessionsBox).focus();
+      updateFocusedStyles();
       screen.render();
     });
 
@@ -977,13 +1140,16 @@ export async function runMainTui(args: {
       if (mode !== "res") return;
       focused = "sessions";
       sessionsBox.focus();
+      updateFocusedStyles();
       screen.render();
     });
 
     updateFooter();
+    updateFocusedStyles();
     projectsBox.focus();
     footer.setFront();
     header.setFront();
+    headerUrl.setFront();
     refresh();
   });
 }
