@@ -545,7 +545,47 @@ export async function runMainTui(args: {
     }
 
     function withConfirm(text: string, cb: (ok: boolean) => void) {
-      question.ask(text, (_err: unknown, ok: unknown) => cb(Boolean(ok)));
+      const modeColor = getModeColor(mode);
+      const confirmBox = blessed.box({
+        parent: screen,
+        top: "center",
+        left: "center",
+        width: "60%",
+        height: 7,
+        border: "line",
+        label: ` {${modeColor}-fg}{bold}Confirm{/bold}{/} `,
+        tags: true,
+        style: {
+          border: { fg: modeColor },
+        },
+        content: text,
+      });
+
+      const confirmFooter = blessed.box({
+        parent: confirmBox,
+        bottom: 0,
+        left: 0,
+        width: "100%-2",
+        height: 1,
+        tags: true,
+        style: {
+          bg: "#374151",
+          fg: "white",
+        },
+        content: " Enter: confirm · Esc: cancel",
+      });
+
+      confirmBox.focus();
+      screen.render();
+
+      function close(result: boolean) {
+        confirmBox.destroy();
+        screen.render();
+        cb(result);
+      }
+
+      confirmBox.key(["enter"], () => close(true));
+      confirmBox.key(["escape", "q"], () => close(false));
     }
 
     function attachSelectedSession() {
@@ -661,6 +701,105 @@ export async function runMainTui(args: {
           showError(err instanceof Error ? err.message : String(err));
         }
       });
+    }
+
+    function showHelp() {
+      const modeColor = getModeColor(mode);
+
+      const globalKeys = [
+        ["1-4", "Switch to mode (res/tmux/codex/claude)"],
+        ["r", "Refresh data"],
+        ["q", "Quit"],
+        ["?", "Show this help"],
+      ];
+
+      const resKeys = [
+        ["Tab", "Switch focus between Projects and Sessions"],
+        ["Enter", "Attach to selected session (or switch to Sessions panel)"],
+        ["c", "Create new tmux session for selected project"],
+        ["d", "Delete selected session (kills tmux session)"],
+        ["l", "Link unlinked tmux session to selected project"],
+        ["u", "Unlink session from project (keeps tmux running)"],
+        ["a", "Add new project by path"],
+        ["x", "Remove project and kill all its sessions"],
+      ];
+
+      const tmuxKeys = [
+        ["Enter", "Attach to selected tmux session"],
+        ["d", "Delete (kill) selected tmux session"],
+        ["c", "Capture pane content from selected session"],
+        ["y", "Copy session name to clipboard"],
+        ["l", "Associate session with a project"],
+        ["u", "Unassociate session from its project"],
+      ];
+
+      const codexKeys = [
+        ["Enter", "View session details"],
+        ["c", "Create tmux session to resume this Codex session"],
+        ["y", "Copy session ID to clipboard"],
+      ];
+
+      const claudeKeys = [
+        ["Enter", "View session details"],
+        ["c", "Create tmux session to resume this Claude session"],
+        ["y", "Copy session ID to clipboard"],
+      ];
+
+      const formatSection = (title: string, keys: string[][], color: string) => {
+        const lines = keys.map(([key, desc]) => `  {bold}${key.padEnd(8)}{/bold} ${desc}`);
+        return `{${color}-fg}{bold}${title}{/bold}{/}\n${lines.join("\n")}`;
+      };
+
+      let content = formatSection("Global", globalKeys, colors.secondary) + "\n\n";
+
+      if (mode === "res") {
+        content += formatSection("Res Mode (Project Sessions)", resKeys, modeColor);
+        content += "\n\n{gray-fg}Tip: 'Add' registers a project directory. 'Create' makes a new tmux session.{/gray-fg}";
+      } else if (mode === "tmux") {
+        content += formatSection("Tmux Mode (All Sessions)", tmuxKeys, modeColor);
+        content += "\n\n{gray-fg}Tip: 'Associate' links an untracked tmux session to a project.{/gray-fg}";
+      } else if (mode === "codex") {
+        content += formatSection("Codex Mode (Codex CLI Sessions)", codexKeys, modeColor);
+        content += "\n\n{gray-fg}Tip: View shows conversation history. Create opens in tmux.{/gray-fg}";
+      } else if (mode === "claude") {
+        content += formatSection("Claude Mode (Claude Code Sessions)", claudeKeys, modeColor);
+        content += "\n\n{gray-fg}Tip: View shows conversation history. Create opens in tmux.{/gray-fg}";
+      }
+
+      const helpBox = blessed.box({
+        parent: screen,
+        top: "center",
+        left: "center",
+        width: "70%",
+        height: "70%",
+        border: "line",
+        label: ` {${modeColor}-fg}{bold}Help{/bold}{/} `,
+        tags: true,
+        keys: true,
+        vi: true,
+        mouse: true,
+        scrollable: true,
+        alwaysScroll: true,
+        scrollbar: { style: { bg: modeColor } },
+        style: { border: { fg: modeColor } },
+        content,
+      });
+
+      footer.setContent("Help · q/esc/?: close");
+      helpBox.focus();
+      screen.render();
+
+      function close() {
+        modalClose = null;
+        helpBox.destroy();
+        updateFooter();
+        updateFocusedStyles();
+        (mode === "res" ? (focused === "projects" ? projectsBox : sessionsBox) : tmuxBox).focus();
+        screen.render();
+      }
+
+      modalClose = close;
+      helpBox.key(["escape", "q", "?"], () => close());
     }
 
     function captureSelectedTmuxSession() {
@@ -972,30 +1111,125 @@ export async function runMainTui(args: {
       });
     }
 
+    function unlinkSelectedSession() {
+      if (!selectedProject) return;
+      if (!sessions.length) return;
+      const idx = getSelectedIndex(sessionsBox);
+      const sess = sessions[idx];
+      if (!sess) return;
+      withConfirm(`Unlink "${sess.name}" from ${selectedProject.name}? (tmux keeps running)`, (ok) => {
+        if (!ok) return refresh();
+        try {
+          args.actions.unassociateSession(sess.name);
+          writeState(args.state);
+          flashFooter(`Unlinked ${sess.name}`);
+          refresh();
+        } catch (err) {
+          showError(err instanceof Error ? err.message : String(err));
+        }
+      });
+    }
+
     function linkExistingSessionToSelectedProject() {
       if (!selectedProject) return;
-      withPrompt("Link tmux session name", "", (name) => {
-        if (!name) return refresh();
-        const project = selectedProject!;
-        const existing = args.state.sessions[name];
-        if (existing && existing.projectId !== project.id) {
-          const existingProject = args.state.projects[existing.projectId]?.name ?? existing.projectId;
-          withConfirm(`Session is currently associated with ${existingProject}.\nMove it to ${project.name}?`, (ok) => {
-            if (!ok) return refresh();
-            try {
-              args.actions.linkSession(project, name, true);
-              writeState(args.state);
-              refresh();
-            } catch (err) {
-              showError(err instanceof Error ? err.message : String(err));
-            }
-          });
-          return;
-        }
+      const project = selectedProject;
+
+      // Get all tmux sessions not already linked to a project
+      const allTmuxSessions = args.actions.listTmuxSessions();
+      const unlinkedSessions = allTmuxSessions.filter((s) => !args.state.sessions[s.name]);
+
+      if (unlinkedSessions.length === 0) {
+        flashFooter("No unlinked tmux sessions available");
+        return;
+      }
+
+      const tmuxColor = modeColors.tmux; // green
+      const items = unlinkedSessions.map((s) => {
+        const cmd = s.currentCommand?.trim() || "(shell)";
+        const path = s.currentPath ? ` {${colors.secondary}-fg}${s.currentPath}{/}` : "";
+        const windows = s.windows > 1 ? ` {gray-fg}${s.windows} windows{/gray-fg}` : "";
+        const attached = s.attached ? ` {${modeColors.codex}-fg}attached{/}` : "";
+        return `{bold}${s.name}{/bold} {gray-fg}${cmd}{/gray-fg}${path}${windows}${attached}`;
+      });
+
+      const modalHeight = Math.min(20, Math.max(9, items.length + 6));
+      const modalContainer = blessed.box({
+        parent: screen,
+        top: "center",
+        left: "center",
+        width: "80%",
+        height: modalHeight,
+        border: "line",
+        label: ` {${tmuxColor}-fg}{bold}tmux sessions{/bold}{/} `,
+        tags: true,
+        style: {
+          border: { fg: tmuxColor },
+        },
+      });
+
+      const modalHeader = blessed.box({
+        parent: modalContainer,
+        top: 0,
+        left: 0,
+        width: "100%-2",
+        height: 1,
+        content: ` Select a tmux session to link to {bold}${project.name}{/bold}`,
+        tags: true,
+        style: {
+          bg: "#374151",
+          fg: "white",
+        },
+      });
+
+      const picker = blessed.list({
+        parent: modalContainer,
+        top: 1,
+        left: 0,
+        width: "100%-2",
+        height: "100%-3",
+        keys: true,
+        vi: true,
+        mouse: true,
+        style: {
+          selected: { bg: tmuxColor, fg: "black", bold: true },
+        },
+        scrollbar: { style: { bg: tmuxColor } },
+        tags: true,
+        items,
+      });
+
+      const previousFooter = footer.getContent();
+      footer.setContent(`Enter: select · Esc/q: cancel`);
+      picker.focus();
+      screen.render();
+
+      function cleanup() {
+        modalClose = null;
+        footer.setContent(previousFooter);
+        modalContainer.destroy();
+        updateFooter();
+        updateFocusedStyles();
+        (focused === "projects" ? projectsBox : sessionsBox).focus();
+        screen.render();
+      }
+
+      function cancel() {
+        cleanup();
+        refresh();
+      }
+
+      modalClose = cancel;
+      picker.key(["escape", "q"], () => cancel());
+      picker.on("select", (_: unknown, idx: number) => {
+        const sess = unlinkedSessions[idx];
+        if (!sess) return cancel();
+
+        cleanup();
 
         try {
-          args.actions.linkSession(project, name, false);
+          args.actions.linkSession(project, sess.name, false);
           writeState(args.state);
+          flashFooter(`Linked ${sess.name} → ${project.name}`);
           refresh();
         } catch (err) {
           showError(err instanceof Error ? err.message : String(err));
@@ -1082,6 +1316,10 @@ export async function runMainTui(args: {
       if (modalClose) return;
       refresh();
     });
+    screen.key(["?"], () => {
+      if (modalClose) return;
+      showHelp();
+    });
     screen.key(["a"], () => {
       if (modalClose) return;
       if (mode !== "res") return;
@@ -1109,8 +1347,8 @@ export async function runMainTui(args: {
     });
     screen.key(["u"], () => {
       if (modalClose) return;
-      if (mode !== "tmux") return;
-      unassociateSelectedTmuxSession();
+      if (mode === "tmux") return unassociateSelectedTmuxSession();
+      if (mode === "res") return unlinkSelectedSession();
     });
     screen.key(["x"], () => {
       if (modalClose) return;
