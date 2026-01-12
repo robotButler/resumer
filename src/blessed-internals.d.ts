@@ -22,3 +22,7 @@ declare module "blessed/lib/widgets/question.js" {
   const Question: any;
   export default Question;
 }
+declare module "blessed/lib/widgets/textbox.js" {
+  const Textbox: any;
+  export default Textbox;
+}

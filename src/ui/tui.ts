@@ -267,6 +267,10 @@ export async function runMainTui(args: {
 
     let footerTimer: ReturnType<typeof setTimeout> | null = null;
 
+    // Search state
+    let searchActive = false;
+    let searchQuery = "";
+
     // Tab definitions with their positions for mouse click detection
     const tabs = ["res", "tmux", "codex", "claude"] as const;
     let tabPositions: Array<{ start: number; end: number; mode: typeof tabs[number] }> = [];
@@ -347,29 +351,102 @@ export async function runMainTui(args: {
       }
     });
 
+    // Helper for styled key in footer: if key is in action, underline it; otherwise "key: action"
+    function styledKey(key: string, action: string): string {
+      const c = colors.secondary;
+      const lowerKey = key.toLowerCase();
+      const lowerAction = action.toLowerCase();
+      const keyIdx = lowerAction.indexOf(lowerKey);
+
+      if (keyIdx >= 0 && key.length === 1) {
+        // Key is in the action name - underline that character
+        const before = action.slice(0, keyIdx);
+        const char = action.slice(keyIdx, keyIdx + 1);
+        const after = action.slice(keyIdx + 1);
+        return `${before}{${c}-fg}{underline}${char}{/underline}{/}${after}`;
+      }
+      // Key not in action - format as "key: action" with key styled
+      return `{${c}-fg}{underline}${key}{/underline}{/}: ${action}`;
+    }
+
     function updateFooter() {
       updateHeader();
+      const c = colors.secondary;
+      const sep = " · ";
+
       if (mode === "tmux") {
         footer.setContent(
-          "Enter: attach · d: delete · c: capture · y: copy name · l: associate · u: unassociate · r: refresh · q: quit",
+          [
+            styledKey("Enter", "attach"),
+            styledKey("d", "delete"),
+            styledKey("c", "capture"),
+            styledKey("y", "copy"),
+            styledKey("l", "link"),
+            styledKey("u", "unlink"),
+            styledKey("/", "search"),
+            styledKey("r", "refresh"),
+            styledKey("?", "help"),
+            styledKey("q", "quit"),
+          ].join(sep),
         );
         return;
       }
       if (mode === "codex") {
         footer.setContent(
-          "Enter: view · c: tmux · y: copy id · r: refresh · q: quit",
+          [
+            styledKey("Enter", "view"),
+            styledKey("c", "create tmux"),
+            styledKey("y", "copy id"),
+            styledKey("/", "search"),
+            styledKey("r", "refresh"),
+            styledKey("q", "quit"),
+          ].join(sep),
         );
         return;
       }
       if (mode === "claude") {
         footer.setContent(
-          "Enter: view · c: tmux · y: copy id · r: refresh · q: quit",
+          [
+            styledKey("Enter", "view"),
+            styledKey("c", "create tmux"),
+            styledKey("y", "copy id"),
+            styledKey("/", "search"),
+            styledKey("r", "refresh"),
+            styledKey("q", "quit"),
+          ].join(sep),
         );
         return;
       }
-      footer.setContent(
-        "Tab: focus · Enter: attach · c: create · d: delete · l: link · a: add · x: remove · r: refresh · q: quit",
-      );
+      if (focused === "projects") {
+        footer.setContent(
+          "Projects" + sep +
+          [
+            styledKey("Enter", "sessions"),
+            styledKey("a", "add"),
+            styledKey("x", "remove"),
+            styledKey("/", "search"),
+            styledKey("r", "refresh"),
+            styledKey("?", "help"),
+            styledKey("q", "quit"),
+          ].join(sep),
+        );
+      } else {
+        footer.setContent(
+          "Sessions" + sep +
+          [
+            styledKey("Tab", "projects"),
+            styledKey("Enter", "attach"),
+            styledKey("c", "create"),
+            styledKey("d", "delete"),
+            styledKey("l", "link"),
+            styledKey("u", "unlink"),
+            styledKey("/", "search"),
+            styledKey("r", "refresh"),
+            styledKey("?", "help"),
+            styledKey("q", "quit"),
+          ].join(sep),
+        );
+      }
     }
 
     function updateFocusedStyles() {
@@ -438,7 +515,45 @@ export async function runMainTui(args: {
     }
 
     function showError(text: string) {
-      question.ask(`Error:\n${text}\n\nOK?`, () => refresh());
+      const errorBox = blessed.box({
+        parent: screen,
+        top: "center",
+        left: "center",
+        width: "60%",
+        height: 7,
+        border: "line",
+        label: ` {${colors.error}-fg}{bold}Error{/bold}{/} `,
+        tags: true,
+        style: {
+          border: { fg: colors.error },
+        },
+        content: text,
+      });
+
+      const errorFooter = blessed.box({
+        parent: errorBox,
+        bottom: 0,
+        left: 0,
+        width: "100%-2",
+        height: 1,
+        tags: true,
+        style: {
+          bg: "#374151",
+          fg: "white",
+        },
+        content: " Enter/Esc: close",
+      });
+
+      errorBox.focus();
+      screen.render();
+
+      function close() {
+        errorBox.destroy();
+        screen.render();
+        refresh();
+      }
+
+      errorBox.key(["enter", "escape", "q"], () => close());
     }
 
     function refreshResMode() {
@@ -536,11 +651,67 @@ export async function runMainTui(args: {
       refresh();
     }
 
-    function withPrompt(title: string, value: string, cb: (input: string) => void) {
-      prompt.setLabel(` ${title} `);
-      prompt.input(title, value, (_err: unknown, input: unknown) => {
-        const text = typeof input === "string" ? input.trim() : "";
-        cb(text);
+    function withPrompt(title: string, value: string, cb: (input: string | null) => void) {
+      const modeColor = getModeColor(mode);
+      const promptBox = blessed.box({
+        parent: screen,
+        top: "center",
+        left: "center",
+        width: "60%",
+        height: 7,
+        border: "line",
+        label: ` {${modeColor}-fg}{bold}${title}{/bold}{/} `,
+        tags: true,
+        style: {
+          border: { fg: modeColor },
+        },
+      });
+
+      const inputBox = blessed.textbox({
+        parent: promptBox,
+        top: 1,
+        left: 1,
+        width: "100%-4",
+        height: 1,
+        inputOnFocus: true,
+        style: {
+          bg: "#374151",
+          fg: "white",
+        },
+        value,
+      });
+
+      const promptFooter = blessed.box({
+        parent: promptBox,
+        bottom: 0,
+        left: 0,
+        width: "100%-2",
+        height: 1,
+        tags: true,
+        style: {
+          bg: "#374151",
+          fg: "white",
+        },
+        content: " Enter: confirm · Esc: cancel",
+      });
+
+      inputBox.focus();
+      screen.render();
+
+      let submitted = false;
+
+      function close(result: string | null) {
+        if (submitted) return;
+        submitted = true;
+        promptBox.destroy();
+        screen.render();
+        cb(result);
+      }
+
+      inputBox.key(["escape"], () => close(null));
+      inputBox.key(["enter"], () => {
+        const text = inputBox.getValue().trim();
+        close(text);
       });
     }
 
@@ -678,7 +849,8 @@ export async function runMainTui(args: {
         content: header + visible,
       });
 
-      footer.setContent("View · q/esc: close · y: copy");
+      const c = colors.secondary;
+      footer.setContent(`View · {${c}-fg}{underline}q{/underline}{/}/{${c}-fg}{underline}Esc{/underline}{/}: close · cop{${c}-fg}{underline}y{/underline}{/}`);
       viewer.focus();
       screen.render();
 
@@ -708,20 +880,26 @@ export async function runMainTui(args: {
 
       const globalKeys = [
         ["1-4", "Switch to mode (res/tmux/codex/claude)"],
+        ["/", "Search in current list"],
         ["r", "Refresh data"],
         ["q", "Quit"],
         ["?", "Show this help"],
       ];
 
-      const resKeys = [
-        ["Tab", "Switch focus between Projects and Sessions"],
-        ["Enter", "Attach to selected session (or switch to Sessions panel)"],
+      const projectsKeys = [
+        ["Tab", "Switch focus to Sessions panel"],
+        ["Enter", "Switch focus to Sessions panel"],
+        ["a", "Add new project by path"],
+        ["x", "Remove project and kill all its sessions"],
+      ];
+
+      const sessionsKeys = [
+        ["Tab", "Switch focus to Projects panel"],
+        ["Enter", "Attach to selected session"],
         ["c", "Create new tmux session for selected project"],
         ["d", "Delete selected session (kills tmux session)"],
         ["l", "Link unlinked tmux session to selected project"],
         ["u", "Unlink session from project (keeps tmux running)"],
-        ["a", "Add new project by path"],
-        ["x", "Remove project and kill all its sessions"],
       ];
 
       const tmuxKeys = [
@@ -753,8 +931,10 @@ export async function runMainTui(args: {
       let content = formatSection("Global", globalKeys, colors.secondary) + "\n\n";
 
       if (mode === "res") {
-        content += formatSection("Res Mode (Project Sessions)", resKeys, modeColor);
-        content += "\n\n{gray-fg}Tip: 'Add' registers a project directory. 'Create' makes a new tmux session.{/gray-fg}";
+        content += formatSection("Projects Panel", projectsKeys, modeColor);
+        content += "\n\n";
+        content += formatSection("Sessions Panel", sessionsKeys, modeColor);
+        content += "\n\n{gray-fg}Tip: 'Add' registers a project. 'Create' makes a tmux session. 'Link' associates an existing one.{/gray-fg}";
       } else if (mode === "tmux") {
         content += formatSection("Tmux Mode (All Sessions)", tmuxKeys, modeColor);
         content += "\n\n{gray-fg}Tip: 'Associate' links an untracked tmux session to a project.{/gray-fg}";
@@ -785,7 +965,8 @@ export async function runMainTui(args: {
         content,
       });
 
-      footer.setContent("Help · q/esc/?: close");
+      const c = colors.secondary;
+      footer.setContent(`Help · {${c}-fg}{underline}q{/underline}{/}/{${c}-fg}{underline}Esc{/underline}{/}: close`);
       helpBox.focus();
       screen.render();
 
@@ -970,7 +1151,8 @@ export async function runMainTui(args: {
       });
 
       const previousFooter = footer.getContent();
-      footer.setContent("Picker · Enter: select · Esc/q: cancel");
+      const c = colors.secondary;
+      footer.setContent(`Picker · {${c}-fg}{underline}Enter{/underline}{/}: select · {${c}-fg}{underline}Esc{/underline}{/}/{${c}-fg}{underline}q{/underline}{/}: cancel`);
       picker.focus();
       screen.render();
 
@@ -1069,13 +1251,109 @@ export async function runMainTui(args: {
       });
     }
 
+    function getConfiguredCommands(): string[] {
+      const envCommands = process.env.RESUMER_COMMANDS?.trim();
+      if (!envCommands) return [];
+      // Support both comma-separated and JSON array format
+      if (envCommands.startsWith("[")) {
+        try {
+          const parsed = JSON.parse(envCommands);
+          if (Array.isArray(parsed)) return parsed.filter((c) => typeof c === "string" && c.trim());
+        } catch {
+          // Fall through to comma-separated
+        }
+      }
+      return envCommands.split(",").map((c) => c.trim()).filter(Boolean);
+    }
+
     function createSessionForSelectedProject() {
       if (!selectedProject) return;
-      withPrompt("Command (optional)", "", (cmd) => {
-        const command = cmd.length ? cmd : undefined;
+      const project = selectedProject;
+
+      const defaultCommands = [
+        "claude --dangerously-skip-permissions",
+        "codex --yolo",
+      ];
+      const userCommands = getConfiguredCommands();
+      const allCommands = [...userCommands, ...defaultCommands.filter((c) => !userCommands.includes(c))];
+
+      type CommandEntry = { kind: "shell" } | { kind: "command"; command: string } | { kind: "custom" };
+      const entries: CommandEntry[] = [
+        { kind: "shell" },
+        ...allCommands.map((command) => ({ kind: "command" as const, command })),
+        { kind: "custom" },
+      ];
+
+      const modeColor = getModeColor(mode);
+      const items = [
+        "{gray-fg}(default shell){/gray-fg}",
+        ...allCommands.map((c) => `{bold}${c}{/bold}`),
+        "{gray-fg}(custom command...){/gray-fg}",
+      ];
+
+      const modalHeight = Math.min(16, Math.max(8, items.length + 5));
+      const modalContainer = blessed.box({
+        parent: screen,
+        top: "center",
+        left: "center",
+        width: "70%",
+        height: modalHeight,
+        border: "line",
+        label: ` {${modeColor}-fg}{bold}New Session{/bold}{/} `,
+        tags: true,
+        style: {
+          border: { fg: modeColor },
+        },
+      });
+
+      const modalHeader = blessed.box({
+        parent: modalContainer,
+        top: 0,
+        left: 0,
+        width: "100%-2",
+        height: 1,
+        content: ` Select a command for {bold}${project.name}{/bold}`,
+        tags: true,
+        style: {
+          bg: "#374151",
+          fg: "white",
+        },
+      });
+
+      const picker = blessed.list({
+        parent: modalContainer,
+        top: 1,
+        left: 0,
+        width: "100%-2",
+        height: "100%-3",
+        keys: true,
+        vi: true,
+        mouse: true,
+        style: {
+          selected: { bg: modeColor, fg: "black", bold: true },
+        },
+        scrollbar: { style: { bg: modeColor } },
+        tags: true,
+        items,
+      });
+
+      const c = colors.secondary;
+      footer.setContent(`{${c}-fg}{underline}Enter{/underline}{/}: select · {${c}-fg}{underline}Esc{/underline}{/}/{${c}-fg}{underline}q{/underline}{/}: cancel`);
+      picker.focus();
+      screen.render();
+
+      function cleanup() {
+        modalContainer.destroy();
+        updateFooter();
+        updateFocusedStyles();
+        (focused === "projects" ? projectsBox : sessionsBox).focus();
+        screen.render();
+      }
+
+      function createSession(command: string | undefined) {
         let sess: SessionRecord;
         try {
-          sess = args.actions.createSession(selectedProject!, command);
+          sess = args.actions.createSession(project, command);
           sess.lastAttachedAt = nowIso();
           writeState(args.state);
         } catch (err) {
@@ -1089,6 +1367,32 @@ export async function runMainTui(args: {
           resolve();
         } catch (err) {
           fail(err);
+        }
+      }
+
+      picker.key(["escape", "q"], () => {
+        cleanup();
+        refresh();
+      });
+
+      picker.on("select", (_: unknown, idx: number) => {
+        const entry = entries[idx];
+        if (!entry) {
+          cleanup();
+          return refresh();
+        }
+
+        cleanup();
+
+        if (entry.kind === "shell") {
+          createSession(undefined);
+        } else if (entry.kind === "command") {
+          createSession(entry.command);
+        } else if (entry.kind === "custom") {
+          withPrompt("Custom command", "", (cmd) => {
+            if (cmd === null || !cmd) return refresh();
+            createSession(cmd);
+          });
         }
       });
     }
@@ -1199,7 +1503,8 @@ export async function runMainTui(args: {
       });
 
       const previousFooter = footer.getContent();
-      footer.setContent(`Enter: select · Esc/q: cancel`);
+      const c = colors.secondary;
+      footer.setContent(`{${c}-fg}{underline}Enter{/underline}{/}: select · {${c}-fg}{underline}Esc{/underline}{/}/{${c}-fg}{underline}q{/underline}{/}: cancel`);
       picker.focus();
       screen.render();
 
@@ -1270,6 +1575,132 @@ export async function runMainTui(args: {
       });
     }
 
+    // Get current list items as plain text for searching
+    function getSearchableItems(): string[] {
+      if (mode === "res") {
+        if (focused === "projects") {
+          return projects.map((p) => `${p.name} ${p.path}`);
+        }
+        return sessions.map((s) => `${s.name} ${s.command ?? ""}`);
+      }
+      if (mode === "tmux") {
+        return tmuxSessions.map((s) => {
+          const project = args.state.sessions[s.name]
+            ? args.state.projects[args.state.sessions[s.name].projectId]?.name ?? ""
+            : "";
+          return `${s.name} ${s.currentCommand ?? ""} ${project}`;
+        });
+      }
+      if (mode === "codex") {
+        return codexSessions.map((s) => `${s.id} ${s.cwd ?? ""} ${s.lastPrompt ?? ""}`);
+      }
+      if (mode === "claude") {
+        return claudeSessions.map((s) => `${s.id} ${s.projectPath ?? ""} ${s.lastPrompt ?? ""}`);
+      }
+      return [];
+    }
+
+    // Get current active list box
+    function getActiveList(): Widgets.ListElement {
+      if (mode === "res") {
+        return focused === "projects" ? projectsBox : sessionsBox;
+      }
+      return tmuxBox;
+    }
+
+    // Find first matching item index
+    function findFirstMatch(query: string, items: string[]): number {
+      if (!query) return -1;
+      const lowerQuery = query.toLowerCase();
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].toLowerCase().includes(lowerQuery)) {
+          return i;
+        }
+      }
+      return -1;
+    }
+
+    function startSearch() {
+      if (modalClose) return;
+      searchActive = true;
+      searchQuery = "";
+
+      const modeColor = getModeColor(mode);
+      const searchBox = blessed.box({
+        parent: screen,
+        bottom: 1,
+        left: 0,
+        width: "100%",
+        height: 1,
+        tags: true,
+        style: {
+          bg: "#374151",
+          fg: "white",
+        },
+        content: ` {${modeColor}-fg}/{/} `,
+      });
+
+      const searchInput = blessed.textbox({
+        parent: screen,
+        bottom: 1,
+        left: 3,
+        width: "100%-4",
+        height: 1,
+        inputOnFocus: true,
+        style: {
+          bg: "#374151",
+          fg: "white",
+        },
+      });
+
+      footer.setContent("Search · " + styledKey("Enter", "select") + " · " + styledKey("Esc", "cancel"));
+      searchInput.focus();
+      screen.render();
+
+      const items = getSearchableItems();
+      const activeList = getActiveList();
+
+      // Handle input changes
+      (searchInput as any).on("keypress", (_ch: string, _key: any) => {
+        // Defer to next tick to get updated value
+        setTimeout(() => {
+          const query = searchInput.getValue();
+          searchQuery = query;
+
+          const matchIdx = findFirstMatch(query, items);
+          if (matchIdx >= 0) {
+            activeList.select(matchIdx);
+            // Update the selected index tracking
+            if (mode === "res" && focused === "projects") {
+              selectedProjectIndex = matchIdx;
+              selectedProject = projects[matchIdx] ?? null;
+              refreshSessionsForSelectedProject();
+            } else if (mode === "tmux") {
+              selectedTmuxIndex = matchIdx;
+            } else if (mode === "codex") {
+              selectedCodexIndex = matchIdx;
+            } else if (mode === "claude") {
+              selectedClaudeIndex = matchIdx;
+            }
+          }
+          screen.render();
+        }, 0);
+      });
+
+      function closeSearch() {
+        searchActive = false;
+        searchQuery = "";
+        searchBox.destroy();
+        searchInput.destroy();
+        updateFooter();
+        activeList.focus();
+        screen.render();
+      }
+
+      searchInput.key(["escape"], () => closeSearch());
+      searchInput.key(["enter"], () => closeSearch());
+    }
+
     screen.key(["C-c"], () => done());
     screen.key(["q"], () => {
       if (modalClose) return modalClose();
@@ -1281,6 +1712,7 @@ export async function runMainTui(args: {
       focused = focused === "projects" ? "sessions" : "projects";
       (focused === "projects" ? projectsBox : sessionsBox).focus();
       updateFocusedStyles();
+      updateFooter();
       screen.render();
     });
 
@@ -1319,6 +1751,11 @@ export async function runMainTui(args: {
     screen.key(["?"], () => {
       if (modalClose) return;
       showHelp();
+    });
+    screen.key(["/"], () => {
+      if (modalClose) return;
+      if (searchActive) return;
+      startSearch();
     });
     screen.key(["a"], () => {
       if (modalClose) return;
@@ -1380,6 +1817,7 @@ export async function runMainTui(args: {
       focused = "sessions";
       sessionsBox.focus();
       updateFocusedStyles();
+      updateFooter();
       screen.render();
     });
 

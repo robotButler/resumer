@@ -114,3 +114,20 @@ Notes:
 Env overrides (space-separated, or a JSON array string):
 - `RESUMER_CODEX_ARGS`
 - `RESUMER_CLAUDE_ARGS`
+
+## Session Commands
+
+When creating a new session (`c` in res mode), you can choose from:
+- Default shell
+- `claude --dangerously-skip-permissions`
+- `codex --yolo`
+- Custom command
+
+Add your own commands via `RESUMER_COMMANDS` (comma-separated or JSON array):
+```bash
+export RESUMER_COMMANDS="npm run dev,python main.py"
+# or
+export RESUMER_COMMANDS='["npm run dev", "python main.py"]'
+```
+
+Your commands appear first, followed by the defaults.
